@@ -35,8 +35,8 @@ omitted.
 | `float`/`vec2`/`vec3`/`vec4` | app-filled, zero-initialized |
 | `padN` | N bytes of padding (must be named `_`) |
 
-Name `_` = no MDX1 attribute definition emitted (still occupies vertex bytes
-unless it's `padN`). Fields are packed consecutively, in order, with no
+Name `_` = no MDX1 attribute definition emitted (still occupies vertex bytes).
+Fields are packed consecutively, in order, with no
 implicit alignment — use explicit `_/padN` if you need it. Each source
 binding may appear at most once. Bad-looking GLSL identifiers only warn
 (exit 0); everything else in §22 of the spec is a hard error.
@@ -67,8 +67,7 @@ cargo test
 Requires Rust 2024. `gltf` is used with `default-features = false` (no
 `import`/`image`) — buffer loading (GLB bin chunk, external files, base64
 data URIs) is hand-rolled in `gltf_util.rs` since xilit never decodes pixel
-data, only reports image/texture metadata. `clap` is pinned to `4.4.18` for
-toolchain compatibility; bump if building with a newer Rust.
+data, only reports image/texture metadata.
 
 ## Layout
 
