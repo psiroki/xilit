@@ -1,0 +1,12 @@
+[package]
+name = "xilit"
+version = "1.0.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+gltf = { version = "1", default-features = false, features = ["extras", "names", "extensions", "utils"] }
+clap = { version = "4.6", features = ["derive"] }
+anyhow = "1"
+base64 = "0.13"
