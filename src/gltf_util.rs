@@ -17,11 +17,24 @@ pub struct LoadedGltf {
     pub base_dir: PathBuf,
 }
 
-pub fn load(path: &Path) -> Result<LoadedGltf> {
+pub fn load(path: &Path, lenient: bool) -> Result<LoadedGltf> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let gltf = gltf::Gltf::from_slice(&bytes)
-        .with_context(|| format!("failed to parse glTF/GLB: {}", path.display()))?;
+    let gltf = if lenient {
+        // Report what strict validation would have rejected, then load anyway.
+        if let Err(e) = gltf::Gltf::from_slice(&bytes) {
+            eprintln!("warning: ignoring glTF validation problems: {e}");
+        }
+        gltf::Gltf::from_slice_without_validation(&bytes)
+            .with_context(|| format!("failed to parse glTF/GLB: {}", path.display()))?
+    } else {
+        gltf::Gltf::from_slice(&bytes).map_err(|e| {
+            anyhow!(
+                "failed to parse glTF/GLB: {e}\n\
+                 hint: pass --lenient to load the model anyway, ignoring validation problems"
+            )
+        })?
+    };
     let base_dir = path
         .parent()
         .map(|p| p.to_path_buf())

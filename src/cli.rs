@@ -16,4 +16,10 @@ pub struct Cli {
     /// Execute commands from a script file and exit.
     #[arg(short = 's', long = "script", value_name = "FILE")]
     pub script: Option<PathBuf>,
+
+    /// Don't reject models that fail glTF validation (e.g. unsupported
+    /// required extensions such as EXT_texture_webp). Problems are printed
+    /// as warnings; export only fails if it actually touches broken data.
+    #[arg(long)]
+    pub lenient: bool,
 }

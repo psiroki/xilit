@@ -80,13 +80,15 @@ pub fn materials(loaded: &LoadedGltf) {
 }
 
 pub fn textures(loaded: &LoadedGltf) {
+    let json = loaded.document.as_json();
     for tex in loaded.document.textures() {
-        println!(
-            "#{}: {} (image #{})",
-            tex.index(),
-            display_name(tex.name()),
-            tex.source().index()
-        );
+        let src = json.textures[tex.index()].source.value();
+        let source = if src < json.images.len() {
+            format!("image #{src}")
+        } else {
+            "no core image source (extension-provided?)".to_string()
+        };
+        println!("#{}: {} ({source})", tex.index(), display_name(tex.name()));
     }
 }
 

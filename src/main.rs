@@ -19,7 +19,7 @@ fn main() {
 fn run() -> Result<()> {
     let cli = cli::Cli::parse();
 
-    let loaded = gltf_util::load(&cli.model)
+    let loaded = gltf_util::load(&cli.model, cli.lenient)
         .with_context(|| format!("failed to open model {}", cli.model.display()))?;
 
     match (&cli.command, &cli.script) {
