@@ -6,7 +6,8 @@
 //! 3). Instead we parse the document with the crate's core (always
 //! available) `Gltf::from_slice`, then resolve buffers ourselves.
 
-use anyhow::{anyhow, bail, Context, Result};
+use crate::diag::codes;
+use anyhow::{Context, Result};
 use gltf::Document;
 use std::path::{Path, PathBuf};
 
@@ -18,18 +19,25 @@ pub struct LoadedGltf {
 }
 
 pub fn load(path: &Path, lenient: bool) -> Result<LoadedGltf> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| {
+        err_code!(codes::MODEL_READ_FAILED, "failed to read {}: {e}", path.display())
+    })?;
     let gltf = if lenient {
         // Report what strict validation would have rejected, then load anyway.
         if let Err(e) = gltf::Gltf::from_slice(&bytes) {
-            eprintln!("warning: ignoring glTF validation problems: {e}");
+            warn_code!(codes::VALIDATION_IGNORED, "ignoring glTF validation problems: {e}");
         }
-        gltf::Gltf::from_slice_without_validation(&bytes)
-            .with_context(|| format!("failed to parse glTF/GLB: {}", path.display()))?
+        gltf::Gltf::from_slice_without_validation(&bytes).map_err(|e| {
+            err_code!(
+                codes::GLTF_UNPARSEABLE,
+                "failed to parse glTF/GLB {}: {e}",
+                path.display()
+            )
+        })?
     } else {
         gltf::Gltf::from_slice(&bytes).map_err(|e| {
-            anyhow!(
+            err_code!(
+                codes::GLTF_INVALID,
                 "failed to parse glTF/GLB: {e}\n\
                  hint: pass --lenient to load the model anyway, ignoring validation problems"
             )
@@ -47,7 +55,8 @@ pub fn load(path: &Path, lenient: bool) -> Result<LoadedGltf> {
     for buffer in document.buffers() {
         let data = match buffer.source() {
             gltf::buffer::Source::Bin => glb_blob.clone().ok_or_else(|| {
-                anyhow!(
+                err_code!(
+                    codes::GLB_CHUNK_MISSING,
                     "buffer #{} refers to the GLB binary chunk, but none is present",
                     buffer.index()
                 )
@@ -56,7 +65,8 @@ pub fn load(path: &Path, lenient: bool) -> Result<LoadedGltf> {
                 .with_context(|| format!("failed to load buffer #{}", buffer.index()))?,
         };
         if data.len() < buffer.length() {
-            bail!(
+            bail_code!(
+                codes::BUFFER_TOO_SHORT,
                 "buffer #{} is shorter than declared ({} < {} bytes)",
                 buffer.index(),
                 data.len(),
@@ -77,18 +87,31 @@ fn load_uri(uri: &str, base_dir: &Path) -> Result<Vec<u8>> {
     if let Some(data) = uri.strip_prefix("data:") {
         let comma = data
             .find(',')
-            .ok_or_else(|| anyhow!("malformed data: URI (no comma)"))?;
+            .ok_or_else(|| err_code!(codes::DATA_URI_MALFORMED, "malformed data: URI (no comma)"))?;
         let (meta, payload) = (&data[..comma], &data[comma + 1..]);
         if !meta.ends_with(";base64") {
-            bail!("unsupported data: URI (only base64-encoded payloads are supported)");
+            bail_code!(
+                codes::DATA_URI_UNSUPPORTED,
+                "unsupported data: URI (only base64-encoded payloads are supported)"
+            );
         }
-        return base64::decode(payload).context("failed to base64-decode data: URI");
+        return base64::decode(payload).map_err(|e| {
+            err_code!(
+                codes::DATA_URI_DECODE_FAILED,
+                "failed to base64-decode data: URI: {e}"
+            )
+        });
     }
 
     let decoded = percent_decode(uri);
     let full_path = base_dir.join(decoded);
-    std::fs::read(&full_path)
-        .with_context(|| format!("failed to read external buffer file {}", full_path.display()))
+    std::fs::read(&full_path).map_err(|e| {
+        err_code!(
+            codes::BUFFER_FILE_READ_FAILED,
+            "failed to read external buffer file {}: {e}",
+            full_path.display()
+        )
+    })
 }
 
 fn percent_decode(s: &str) -> String {
@@ -120,17 +143,25 @@ fn accessor_bytes<'a>(
     accessor: &gltf::Accessor,
 ) -> Result<(&'a [u8], usize, usize)> {
     if accessor.sparse().is_some() {
-        bail!(
+        bail_code!(
+            codes::ACCESSOR_SPARSE,
             "accessor #{} uses sparse storage, which xilit does not support",
             accessor.index()
         );
     }
     let view = accessor
         .view()
-        .ok_or_else(|| anyhow!("accessor #{} has no buffer view", accessor.index()))?;
+        .ok_or_else(|| {
+            err_code!(
+                codes::ACCESSOR_NO_VIEW,
+                "accessor #{} has no buffer view",
+                accessor.index()
+            )
+        })?;
     let buffer = view.buffer();
     let buf_data = buffers.get(buffer.index()).ok_or_else(|| {
-        anyhow!(
+        err_code!(
+            codes::ACCESSOR_BAD_BUFFER,
             "accessor #{} refers to out-of-range buffer #{}",
             accessor.index(),
             buffer.index()
@@ -146,7 +177,8 @@ fn accessor_bytes<'a>(
     let needed = base + stride.max(default_stride) * accessor.count().saturating_sub(1)
         + default_stride;
     if needed > buf_data.len() {
-        bail!(
+        bail_code!(
+            codes::ACCESSOR_OUT_OF_BOUNDS,
             "accessor #{} extends past the end of its buffer ({} > {} bytes)",
             accessor.index(),
             needed,
@@ -188,7 +220,8 @@ pub fn read_float_accessor(
     accessor: &gltf::Accessor,
 ) -> Result<Vec<Vec<f32>>> {
     if accessor.data_type() != gltf::accessor::DataType::F32 {
-        bail!(
+        bail_code!(
+            codes::SOURCE_NOT_FLOAT,
             "accessor #{} is not floating-point (found {:?}); xilit does not convert or \
              normalize non-float source data",
             accessor.index(),
@@ -224,7 +257,8 @@ pub fn read_index_accessor(buffers: &[Vec<u8>], accessor: &gltf::Accessor) -> Re
             DataType::U8 => data[off] as u32,
             DataType::U16 => u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as u32,
             DataType::U32 => u32::from_le_bytes(data[off..off + 4].try_into().unwrap()),
-            other => bail!(
+            other => bail_code!(
+                codes::INDEX_BAD_TYPE,
                 "index accessor #{} has unsupported component type {other:?}; expected \
                  UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT",
                 accessor.index()

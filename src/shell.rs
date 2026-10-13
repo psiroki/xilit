@@ -3,7 +3,8 @@
 
 use crate::gltf_util::LoadedGltf;
 use crate::objref;
-use anyhow::{bail, Result};
+use crate::diag::{self, codes};
+use anyhow::Result;
 use std::io::Write;
 
 /// Run every command found in `input` (splitting on top-level `;`/newline).
@@ -26,7 +27,9 @@ pub fn run_interactive(loaded: &LoadedGltf) -> Result<()> {
         std::io::stdout().flush().ok();
 
         let mut line = String::new();
-        let bytes_read = stdin.read_line(&mut line)?;
+        let bytes_read = stdin.read_line(&mut line).map_err(|e| {
+            err_code!(codes::STDIN_READ_FAILED, "failed to read from stdin: {e}")
+        })?;
         if bytes_read == 0 {
             println!();
             break;
@@ -38,7 +41,7 @@ pub fn run_interactive(loaded: &LoadedGltf) -> Result<()> {
 
         for raw_cmd in objref::split_commands(line) {
             if let Err(e) = dispatch(loaded, &raw_cmd) {
-                eprintln!("error: {e:#}");
+                diag::report_error(&e);
             }
         }
     }
@@ -62,7 +65,8 @@ fn dispatch(loaded: &LoadedGltf, raw_cmd: &str) -> Result<()> {
                 crate::commands::list::meshes(loaded);
             }
             Some("export") => crate::commands::mesh::export(loaded, &tokens[2..])?,
-            _ => bail!(
+            _ => bail_code!(
+                codes::BAD_USAGE,
                 "usage: mesh list | mesh export <mesh>/<primitiveIndex> <filename.mdx> [--vfmt <vertexFormat>]"
             ),
         },
@@ -71,37 +75,37 @@ fn dispatch(loaded: &LoadedGltf, raw_cmd: &str) -> Result<()> {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::images(loaded);
             }
-            _ => bail!("usage: image list"),
+            _ => bail_code!(codes::BAD_USAGE, "usage: image list"),
         },
         "material" => match tokens.get(1).map(String::as_str) {
             Some("list") => {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::materials(loaded);
             }
-            _ => bail!("usage: material list"),
+            _ => bail_code!(codes::BAD_USAGE, "usage: material list"),
         },
         "texture" => match tokens.get(1).map(String::as_str) {
             Some("list") => {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::textures(loaded);
             }
-            _ => bail!("usage: texture list"),
+            _ => bail_code!(codes::BAD_USAGE, "usage: texture list"),
         },
         "node" => match tokens.get(1).map(String::as_str) {
             Some("list") => {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::nodes(loaded);
             }
-            _ => bail!("usage: node list"),
+            _ => bail_code!(codes::BAD_USAGE, "usage: node list"),
         },
         "scene" => match tokens.get(1).map(String::as_str) {
             Some("list") => {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::scenes(loaded);
             }
-            _ => bail!("usage: scene list"),
+            _ => bail_code!(codes::BAD_USAGE, "usage: scene list"),
         },
-        other => bail!("unknown command: {other}"),
+        other => bail_code!(codes::UNKNOWN_COMMAND, "unknown command: {other}"),
     }
 
     Ok(())
@@ -109,7 +113,8 @@ fn dispatch(loaded: &LoadedGltf, raw_cmd: &str) -> Result<()> {
 
 fn require_no_more_args(tokens: &[String], expected_len: usize) -> Result<()> {
     if tokens.len() != expected_len {
-        bail!(
+        bail_code!(
+            codes::UNEXPECTED_ARGUMENT,
             "unexpected extra argument(s): {}",
             tokens[expected_len..].join(" ")
         );

@@ -4,7 +4,8 @@
 use crate::gltf_util::{self, LoadedGltf};
 use crate::objref::ObjRef;
 use crate::vfmt::{self, Layout, SourceKind};
-use anyhow::{anyhow, bail, Context, Result};
+use crate::diag::codes;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -32,12 +33,12 @@ fn resolve_mesh<'a>(loaded: &'a LoadedGltf, objref: &ObjRef) -> Result<gltf::Mes
             .document
             .meshes()
             .nth(*i)
-            .ok_or_else(|| anyhow!("no mesh at index #{i}")),
+            .ok_or_else(|| err_code!(codes::MESH_NOT_FOUND, "no mesh at index #{i}")),
         ObjRef::Name(name) => loaded
             .document
             .meshes()
             .find(|m| m.name() == Some(name.as_str()))
-            .ok_or_else(|| anyhow!("no mesh named {name:?}")),
+            .ok_or_else(|| err_code!(codes::MESH_NOT_FOUND, "no mesh named {name:?}")),
     }
 }
 
@@ -46,7 +47,10 @@ fn resolve_mesh<'a>(loaded: &'a LoadedGltf, objref: &ObjRef) -> Result<gltf::Mes
 /// [`crate::objref::tokenize_raw`]).
 pub fn export(loaded: &LoadedGltf, args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        bail!("usage: mesh export <mesh>/<primitiveIndex> <filename.mdx> [--vfmt <vertexFormat>]");
+        bail_code!(
+            codes::BAD_USAGE,
+            "usage: mesh export <mesh>/<primitiveIndex> <filename.mdx> [--vfmt <vertexFormat>]"
+        );
     }
 
     let (mesh_ref, prim_index) = crate::objref::parse_objref_with_index(&args[0])
@@ -60,11 +64,11 @@ pub fn export(loaded: &LoadedGltf, args: &[String]) -> Result<()> {
             "--vfmt" => {
                 let value = args
                     .get(i + 1)
-                    .ok_or_else(|| anyhow!("--vfmt requires a value"))?;
+                    .ok_or_else(|| err_code!(codes::MISSING_OPTION_VALUE, "--vfmt requires a value"))?;
                 vfmt_str = crate::objref::unquote_token(value)?;
                 i += 2;
             }
-            other => bail!("unexpected argument: {other}"),
+            other => bail_code!(codes::UNEXPECTED_ARGUMENT, "unexpected argument: {other}"),
         }
     }
 
@@ -81,27 +85,35 @@ fn run_export(
     let mesh = resolve_mesh(loaded, mesh_ref)?;
     let primitives: Vec<_> = mesh.primitives().collect();
     let prim = primitives.get(prim_index).ok_or_else(|| {
-        anyhow!(
+        err_code!(
+            codes::PRIMITIVE_NOT_FOUND,
             "mesh {mesh_ref} has {} primitive(s); no primitive #{prim_index}",
             primitives.len()
         )
     })?;
 
     if prim.mode() != gltf::mesh::Mode::Triangles {
-        bail!(
+        bail_code!(
+            codes::PRIMITIVE_NOT_TRIANGLES,
             "primitive {mesh_ref}/{prim_index} uses mode {:?}; MDX1 only supports TRIANGLES",
             prim.mode()
         );
     }
 
     let indices_accessor = prim.indices().ok_or_else(|| {
-        anyhow!("primitive {mesh_ref}/{prim_index} has no index accessor (non-indexed primitives are not supported)")
+        err_code!(
+            codes::PRIMITIVE_NOT_INDEXED,
+            "primitive {mesh_ref}/{prim_index} has no index accessor (non-indexed primitives are not supported)"
+        )
     })?;
     let raw_indices = gltf_util::read_index_accessor(&loaded.buffers, &indices_accessor)?;
     let mut indices_u16 = Vec::with_capacity(raw_indices.len());
     for v in raw_indices {
         if v > u16::MAX as u32 {
-            bail!("index {v} does not fit into MDX1's u16 index type");
+            bail_code!(
+                codes::INDEX_OVERFLOW,
+                "index {v} does not fit into MDX1's u16 index type"
+            );
         }
         indices_u16.push(v as u16);
     }
@@ -110,8 +122,9 @@ fn run_export(
     let fields = vfmt::parse_vfmt(vfmt_str)?;
     for field in &fields {
         if !field.is_hidden() && !vfmt::looks_like_glsl_identifier(&field.name) {
-            eprintln!(
-                "warning: emitted attribute name {:?} does not look like a valid GLSL variable identifier",
+            warn_code!(
+                codes::VFMT_BAD_GLSL_NAME,
+                "emitted attribute name {:?} does not look like a valid GLSL variable identifier",
                 field.name
             );
         }
@@ -126,7 +139,12 @@ fn run_export(
 
     let position_accessor = attributes
         .get("POSITION")
-        .ok_or_else(|| anyhow!("primitive {mesh_ref}/{prim_index} has no POSITION attribute"))?;
+        .ok_or_else(|| {
+            err_code!(
+                codes::MISSING_POSITION,
+                "primitive {mesh_ref}/{prim_index} has no POSITION attribute"
+            )
+        })?;
     let vertex_count = position_accessor.count();
 
     // Gather every distinct source binding the vertex format needs, read
@@ -141,7 +159,8 @@ fn run_export(
         }
         let attr_name = kind.gltf_attribute_name();
         let accessor = attributes.get(&attr_name).ok_or_else(|| {
-            anyhow!(
+            err_code!(
+                codes::SOURCE_MISSING,
                 "vertex format requests '{kind}', but primitive {mesh_ref}/{prim_index} has no {attr_name} attribute"
             )
         })?;
@@ -151,7 +170,8 @@ fn run_export(
         })?;
 
         if rows.len() != vertex_count {
-            bail!(
+            bail_code!(
+                codes::SOURCE_COUNT_MISMATCH,
                 "source attribute '{kind}' ({attr_name}) has {} vertices, but POSITION has {vertex_count}",
                 rows.len()
             );
@@ -159,7 +179,8 @@ fn run_export(
         let expected_components = kind.component_count() as usize;
         if let Some(first) = rows.first() {
             if first.len() != expected_components {
-                bail!(
+                bail_code!(
+                    codes::SOURCE_COMPONENTS_MISMATCH,
                     "source attribute '{kind}' ({attr_name}) has {} components per vertex, expected {expected_components}",
                     first.len()
                 );
@@ -169,12 +190,25 @@ fn run_export(
         sources.insert(kind, rows);
     }
 
-    let file = std::fs::File::create(out_path)
-        .with_context(|| format!("failed to create output file {}", out_path.display()))?;
+    let file = std::fs::File::create(out_path).map_err(|e| {
+        err_code!(
+            codes::OUTPUT_CREATE_FAILED,
+            "failed to create output file {}: {e}",
+            out_path.display()
+        )
+    })?;
     let mut writer = std::io::BufWriter::new(file);
-    crate::mdx::write_mdx1(&mut writer, &layout, vertex_count, &sources, &indices_u16)?;
+    let write_failed = |e: &dyn std::fmt::Display| {
+        err_code!(
+            codes::OUTPUT_WRITE_FAILED,
+            "failed to write output file {}: {e}",
+            out_path.display()
+        )
+    };
+    crate::mdx::write_mdx1(&mut writer, &layout, vertex_count, &sources, &indices_u16)
+        .map_err(|e| write_failed(&format!("{e:#}")))?;
     use std::io::Write;
-    writer.flush()?;
+    writer.flush().map_err(|e| write_failed(&e))?;
 
     println!(
         "exported {mesh_ref}/{prim_index} -> {} ({vertex_count} vertices, {} indices, {} bytes/vertex)",

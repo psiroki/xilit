@@ -1,7 +1,8 @@
 //! Parsing of the `--vfmt` vertex format language (spec sections 9-15) and
 //! computation of the resulting vertex layout.
 
-use anyhow::{anyhow, bail, Result};
+use crate::diag::codes;
+use anyhow::{Context, Result};
 use std::collections::HashSet;
 
 pub const HIDDEN_NAME: &str = "_";
@@ -129,16 +130,20 @@ fn parse_binding(s: &str) -> Result<Binding> {
     }
     if let Some(rest) = s.strip_prefix("pad") {
         if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-            let n: u32 = rest
-                .parse()
-                .map_err(|_| anyhow!("padding amount too large: pad{rest}"))?;
+            let n: u32 = rest.parse().map_err(|_| {
+                err_code!(codes::VFMT_BAD_PADDING, "padding amount too large: pad{rest}")
+            })?;
             if n == 0 {
-                bail!("padding amount must be a positive integer, got pad{rest}");
+                bail_code!(
+                    codes::VFMT_BAD_PADDING,
+                    "padding amount must be a positive integer, got pad{rest}"
+                );
             }
             return Ok(Binding::Pad(n));
         }
     }
-    bail!(
+    bail_code!(
+        codes::VFMT_UNKNOWN_BINDING,
         "unknown vertex format binding {s:?}: expected one of position, normal, tangent, uvN, \
          float, vec2, vec3, vec4, or padN"
     )
@@ -154,21 +159,25 @@ pub fn parse_vfmt(s: &str) -> Result<Vec<VfmtField>> {
     for raw_field in s.split(',') {
         let raw_field = raw_field.trim();
         if raw_field.is_empty() {
-            bail!("empty field in vertex format: {s:?}");
+            bail_code!(codes::VFMT_EMPTY_FIELD, "empty field in vertex format: {s:?}");
         }
         let (name, binding_str) = match raw_field.split_once('/') {
             Some((name, binding)) => (name, binding),
             None => (raw_field, raw_field),
         };
         if name.is_empty() {
-            bail!("empty attribute name in vertex format field: {raw_field:?}");
+            bail_code!(
+                codes::VFMT_EMPTY_NAME,
+                "empty attribute name in vertex format field: {raw_field:?}"
+            );
         }
         let binding = parse_binding(binding_str)
-            .map_err(|e| anyhow!("in vertex format field {raw_field:?}: {e}"))?;
+            .with_context(|| format!("in vertex format field {raw_field:?}"))?;
 
         if let Binding::Pad(_) = binding {
             if name != HIDDEN_NAME {
-                bail!(
+                bail_code!(
+                    codes::VFMT_NAMED_PADDING,
                     "padding (padN) must use the hidden attribute name '_', e.g. \"_/{binding_str}\", \
                      got: {raw_field:?}"
                 );
@@ -179,9 +188,6 @@ pub fn parse_vfmt(s: &str) -> Result<Vec<VfmtField>> {
             name: name.to_string(),
             binding,
         });
-    }
-    if fields.is_empty() {
-        bail!("vertex format must not be empty");
     }
     Ok(fields)
 }
@@ -226,7 +232,8 @@ impl Layout {
             let (size, component_count, emits_attribute) = match field.binding {
                 Binding::Source(kind) => {
                     if !used_sources.insert(kind) {
-                        bail!(
+                        bail_code!(
+                            codes::VFMT_DUPLICATE_SOURCE,
                             "source binding '{kind}' is used more than once in the vertex format"
                         );
                     }
@@ -243,7 +250,9 @@ impl Layout {
                 component_count,
                 emits_attribute,
             });
-            offset += size;
+            offset = offset.checked_add(size).ok_or_else(|| {
+                err_code!(codes::VFMT_TOO_LARGE, "vertex layout is larger than 4 GiB")
+            })?;
         }
 
         Ok(Layout {

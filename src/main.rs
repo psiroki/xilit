@@ -1,3 +1,6 @@
+#[macro_use]
+mod diag;
+
 mod cli;
 mod commands;
 mod gltf_util;
@@ -11,7 +14,7 @@ use clap::Parser;
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("error: {e:#}");
+        diag::report_error(&e);
         std::process::exit(1);
     }
 }
@@ -24,12 +27,17 @@ fn run() -> Result<()> {
 
     match (&cli.command, &cli.script) {
         (Some(_), Some(_)) => {
-            anyhow::bail!("-c and -s cannot be used together");
+            bail_code!(diag::codes::CONFLICTING_MODES, "-c and -s cannot be used together");
         }
         (Some(command), None) => shell::run_all(&loaded, command),
         (None, Some(script_path)) => {
-            let contents = std::fs::read_to_string(script_path)
-                .with_context(|| format!("failed to read script {}", script_path.display()))?;
+            let contents = std::fs::read_to_string(script_path).map_err(|e| {
+                err_code!(
+                    diag::codes::SCRIPT_READ_FAILED,
+                    "failed to read script {}: {e}",
+                    script_path.display()
+                )
+            })?;
             shell::run_all(&loaded, &contents)
         }
         (None, None) => shell::run_interactive(&loaded),

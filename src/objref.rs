@@ -15,7 +15,8 @@
 //! * `;` and newlines separate commands, except when they occur inside a
 //!   quoted string.
 
-use anyhow::{anyhow, bail, Result};
+use crate::diag::codes;
+use anyhow::Result;
 
 /// A reference to a glTF object: either a name or a zero-based index.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,7 +95,10 @@ pub fn tokenize_raw(input: &str) -> Result<Vec<String>> {
             if c == '\\' {
                 match chars.next() {
                     Some(next) => current.push(next),
-                    None => bail!("unterminated escape sequence in quoted string"),
+                    None => bail_code!(
+                        codes::UNTERMINATED_QUOTE,
+                        "unterminated escape sequence in quoted string"
+                    ),
                 }
             } else if c == '"' {
                 in_quotes = false;
@@ -122,7 +126,7 @@ pub fn tokenize_raw(input: &str) -> Result<Vec<String>> {
     }
 
     if in_quotes {
-        bail!("unterminated quoted string");
+        bail_code!(codes::UNTERMINATED_QUOTE, "unterminated quoted string");
     }
 
     if has_token {
@@ -137,7 +141,7 @@ fn unescape_json_string(s: &str) -> Result<String> {
     let inner = s
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
-        .ok_or_else(|| anyhow!("expected a JSON-quoted string, got: {s}"))?;
+        .ok_or_else(|| err_code!(codes::UNTERMINATED_QUOTE, "expected a JSON-quoted string, got: {s}"))?;
 
     let mut out = String::new();
     let mut chars = inner.chars();
@@ -157,14 +161,18 @@ fn unescape_json_string(s: &str) -> Result<String> {
             Some('f') => out.push('\u{c}'),
             Some('u') => {
                 let hex: String = (0..4)
-                    .map(|_| chars.next().ok_or_else(|| anyhow!("truncated \\u escape")))
+                    .map(|_| {
+                        chars
+                            .next()
+                            .ok_or_else(|| err_code!(codes::INVALID_ESCAPE, "truncated \\u escape"))
+                    })
                     .collect::<Result<String>>()?;
                 let code = u32::from_str_radix(&hex, 16)
-                    .map_err(|_| anyhow!("invalid \\u escape: {hex}"))?;
+                    .map_err(|_| err_code!(codes::INVALID_ESCAPE, "invalid \\u escape: {hex}"))?;
                 out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
             }
-            Some(other) => bail!("invalid escape sequence: \\{other}"),
-            None => bail!("truncated escape sequence"),
+            Some(other) => bail_code!(codes::INVALID_ESCAPE, "invalid escape sequence: \\{other}"),
+            None => bail_code!(codes::INVALID_ESCAPE, "truncated escape sequence"),
         }
     }
     Ok(out)
@@ -209,7 +217,7 @@ fn take_quoted(s: &str) -> Result<(&str, &str)> {
         }
         i += 1;
     }
-    bail!("unterminated quoted string in token: {s}")
+    bail_code!(codes::UNTERMINATED_QUOTE, "unterminated quoted string in token: {s}")
 }
 
 /// Parse a raw (still possibly quoted) token as an [`ObjRef`].
@@ -217,21 +225,28 @@ pub fn parse_objref(tok: &str) -> Result<ObjRef> {
     if let Some(rest) = tok.strip_prefix('#') {
         let idx: usize = rest
             .parse()
-            .map_err(|_| anyhow!("invalid object index: #{rest}"))?;
+            .map_err(|_| err_code!(codes::INVALID_OBJECT_REFERENCE, "invalid object index: #{rest}"))?;
         return Ok(ObjRef::Index(idx));
     }
     if tok.starts_with('"') {
         let (quoted, remainder) = take_quoted(tok)?;
         if !remainder.is_empty() {
-            bail!("unexpected trailing characters after quoted name: {remainder}");
+            bail_code!(
+                codes::INVALID_OBJECT_REFERENCE,
+                "unexpected trailing characters after quoted name: {remainder}"
+            );
         }
         return Ok(ObjRef::Name(unescape_json_string(quoted)?));
     }
     if tok.is_empty() {
-        bail!("expected an object reference (a name or #index), got nothing");
+        bail_code!(
+            codes::INVALID_OBJECT_REFERENCE,
+            "expected an object reference (a name or #index), got nothing"
+        );
     }
     if tok.contains('/') || tok.chars().any(|c| c.is_whitespace()) {
-        bail!(
+        bail_code!(
+            codes::INVALID_OBJECT_REFERENCE,
             "object name {tok:?} contains '/' or whitespace and must be JSON-quoted, e.g. \"{tok}\""
         );
     }
@@ -246,24 +261,45 @@ pub fn parse_objref_with_index(tok: &str) -> Result<(ObjRef, usize)> {
     } else if let Some(rest) = tok.strip_prefix('#') {
         let digits_len = rest.chars().take_while(|c| c.is_ascii_digit()).count();
         if digits_len == 0 {
-            bail!("expected digits after '#' in {tok:?}");
+            bail_code!(
+                codes::INVALID_PRIMITIVE_REFERENCE,
+                "expected digits after '#' in {tok:?}"
+            );
         }
         let split_at = 1 + digits_len;
         (&tok[..split_at], &tok[split_at..])
     } else {
         let slash = tok
             .find('/')
-            .ok_or_else(|| anyhow!("expected <mesh>/<primitiveIndex>, got: {tok}"))?;
+            .ok_or_else(|| {
+                err_code!(
+                    codes::INVALID_PRIMITIVE_REFERENCE,
+                    "expected <mesh>/<primitiveIndex>, got: {tok}"
+                )
+            })?;
         (&tok[..slash], &tok[slash..])
     };
 
     let remainder = remainder
         .strip_prefix('/')
-        .ok_or_else(|| anyhow!("expected '/<primitiveIndex>' after {name_part:?} in {tok:?}"))?;
+        .ok_or_else(|| {
+        err_code!(
+            codes::INVALID_PRIMITIVE_REFERENCE,
+            "expected '/<primitiveIndex>' after {name_part:?} in {tok:?}"
+        )
+    })?;
     if remainder.is_empty() || !remainder.chars().all(|c| c.is_ascii_digit()) {
-        bail!("expected a numeric primitive index after '/', got: {remainder:?}");
+        bail_code!(
+            codes::INVALID_PRIMITIVE_REFERENCE,
+            "expected a numeric primitive index after '/', got: {remainder:?}"
+        );
     }
-    let prim_index: usize = remainder.parse()?;
+    let prim_index: usize = remainder.parse().map_err(|_| {
+        err_code!(
+            codes::INVALID_PRIMITIVE_REFERENCE,
+            "primitive index {remainder:?} is too large"
+        )
+    })?;
     let objref = parse_objref(name_part)?;
     Ok((objref, prim_index))
 }
