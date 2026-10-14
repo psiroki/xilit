@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// xilit — inspect glTF 2.0 / GLB models and export mesh primitives to MDX1.
+/// xilit — inspect glTF 2.0 / GLB models and export them to MDX2.
 #[derive(Parser, Debug)]
 #[command(name = "xilit", version, about)]
 pub struct Cli {

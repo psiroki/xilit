@@ -4,10 +4,14 @@ mod diag;
 mod cli;
 mod commands;
 mod gltf_util;
-mod mdx;
+mod matmap;
+mod mdx2;
 mod objref;
+mod scene;
+mod selector;
 mod shell;
 mod vfmt;
+mod xform;
 
 use anyhow::{Context, Result};
 use clap::Parser;

@@ -19,6 +19,7 @@ use crate::diag::codes;
 use anyhow::Result;
 
 /// A reference to a glTF object: either a name or a zero-based index.
+/// (For `mdx export` selectors the name is a glob pattern.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjRef {
     Index(usize),
@@ -253,57 +254,6 @@ pub fn parse_objref(tok: &str) -> Result<ObjRef> {
     Ok(ObjRef::Name(tok.to_string()))
 }
 
-/// Parse a raw token of the form `<objref>/<primitiveIndex>` as used by
-/// `mesh export`, e.g. `#0/0` or `"My Mesh"/0`.
-pub fn parse_objref_with_index(tok: &str) -> Result<(ObjRef, usize)> {
-    let (name_part, remainder) = if tok.starts_with('"') {
-        take_quoted(tok)?
-    } else if let Some(rest) = tok.strip_prefix('#') {
-        let digits_len = rest.chars().take_while(|c| c.is_ascii_digit()).count();
-        if digits_len == 0 {
-            bail_code!(
-                codes::INVALID_PRIMITIVE_REFERENCE,
-                "expected digits after '#' in {tok:?}"
-            );
-        }
-        let split_at = 1 + digits_len;
-        (&tok[..split_at], &tok[split_at..])
-    } else {
-        let slash = tok
-            .find('/')
-            .ok_or_else(|| {
-                err_code!(
-                    codes::INVALID_PRIMITIVE_REFERENCE,
-                    "expected <mesh>/<primitiveIndex>, got: {tok}"
-                )
-            })?;
-        (&tok[..slash], &tok[slash..])
-    };
-
-    let remainder = remainder
-        .strip_prefix('/')
-        .ok_or_else(|| {
-        err_code!(
-            codes::INVALID_PRIMITIVE_REFERENCE,
-            "expected '/<primitiveIndex>' after {name_part:?} in {tok:?}"
-        )
-    })?;
-    if remainder.is_empty() || !remainder.chars().all(|c| c.is_ascii_digit()) {
-        bail_code!(
-            codes::INVALID_PRIMITIVE_REFERENCE,
-            "expected a numeric primitive index after '/', got: {remainder:?}"
-        );
-    }
-    let prim_index: usize = remainder.parse().map_err(|_| {
-        err_code!(
-            codes::INVALID_PRIMITIVE_REFERENCE,
-            "primitive index {remainder:?} is too large"
-        )
-    })?;
-    let objref = parse_objref(name_part)?;
-    Ok((objref, prim_index))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,19 +280,5 @@ mod tests {
     #[test]
     fn objref_index() {
         assert_eq!(parse_objref("#3").unwrap(), ObjRef::Index(3));
-    }
-
-    #[test]
-    fn objref_with_index_quoted() {
-        let (r, i) = parse_objref_with_index("\"My Mesh\"/2").unwrap();
-        assert_eq!(r, ObjRef::Name("My Mesh".to_string()));
-        assert_eq!(i, 2);
-    }
-
-    #[test]
-    fn objref_with_index_hash() {
-        let (r, i) = parse_objref_with_index("#0/0").unwrap();
-        assert_eq!(r, ObjRef::Index(0));
-        assert_eq!(i, 0);
     }
 }

@@ -64,10 +64,17 @@ fn dispatch(loaded: &LoadedGltf, raw_cmd: &str) -> Result<()> {
                 require_no_more_args(&tokens, 2)?;
                 crate::commands::list::meshes(loaded);
             }
-            Some("export") => crate::commands::mesh::export(loaded, &tokens[2..])?,
+            Some("export") => bail_code!(
+                codes::BAD_USAGE,
+                "`mesh export` (MDX1) was removed in xilit 2.0; use `mdx export <selector>... <filename.mdx>`"
+            ),
+            _ => bail_code!(codes::BAD_USAGE, "usage: mesh list"),
+        },
+        "mdx" => match tokens.get(1).map(String::as_str) {
+            Some("export") => crate::commands::mdx::export(loaded, &tokens[2..])?,
             _ => bail_code!(
                 codes::BAD_USAGE,
-                "usage: mesh list | mesh export <mesh>/<primitiveIndex> <filename.mdx> [--vfmt <vertexFormat>]"
+                "usage: mdx export <selector>... <filename.mdx> [--vfmt <vertexFormat>] [--matmap <mapping>] [--no-descendants]"
             ),
         },
         "image" => match tokens.get(1).map(String::as_str) {
