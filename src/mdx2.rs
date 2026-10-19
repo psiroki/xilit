@@ -4,9 +4,11 @@
 //!
 //! Every chunk is `FourCC (4) | payload size (u32, unpadded) | payload |
 //! zero padding to a multiple of 4`, so every chunk starts 4-byte aligned.
-//! Chunk references are absolute file offsets of the referenced chunk's
-//! header (the master container starts at file offset 0, so these are also
-//! offsets from the start of the master container).
+//! The whole output is one master `MDX2` chunk whose payload holds all the
+//! others. A chunk reference is the offset of the referenced chunk's header
+//! from the first byte of the master chunk's *payload* (so the first child
+//! is at offset 0). Nothing in the output depends on where the master chunk
+//! is stored: it can be embedded in another file, or moved, unchanged.
 
 use crate::diag::codes;
 use crate::vfmt::Layout;
@@ -17,6 +19,10 @@ pub const GL_TRIANGLES: u32 = 0x0004;
 pub const GL_UNSIGNED_SHORT: u32 = 0x1403;
 pub const GL_FLOAT: u32 = 0x1406;
 pub const GL_FALSE: u32 = 0;
+
+/// Size of the master chunk's header (FourCC + payload size); chunk
+/// references are measured from the byte after it.
+const MASTER_HEADER_SIZE: usize = 8;
 
 /// Shared string pool (`STRS` payload): deduplicated NUL-terminated strings;
 /// [`StringPool::intern`] returns the byte offset from the start of the pool.
@@ -74,7 +80,7 @@ struct Writer {
 
 impl Writer {
     fn new() -> Writer {
-        // Master container header; its size is patched in `finish`.
+        // Master chunk header; its payload size is patched in `finish`.
         let mut buf = Vec::new();
         buf.extend_from_slice(b"MDX2");
         buf.extend_from_slice(&0u32.to_le_bytes());
@@ -95,6 +101,7 @@ impl Writer {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
 
+    /// Write a chunk reference (a payload offset), resolved in `finish`.
     fn reference(&mut self, id: ChunkId) {
         self.refs.push((self.buf.len(), id));
         self.u32(0);
@@ -122,10 +129,12 @@ impl Writer {
             bail_code!(codes::OUTPUT_TOO_LARGE, "output file exceeds 4 GiB");
         }
         for (at, id) in std::mem::take(&mut self.refs) {
-            let target = self.offsets[id.0].expect("every referenced chunk is written");
-            self.buf[at..at + 4].copy_from_slice(&(target as u32).to_le_bytes());
+            let header = self.offsets[id.0].expect("every referenced chunk is written");
+            // Relative to the master payload, not to the start of the file.
+            let payload_offset = (header - MASTER_HEADER_SIZE) as u32;
+            self.buf[at..at + 4].copy_from_slice(&payload_offset.to_le_bytes());
         }
-        let master_payload = (self.buf.len() - 8) as u32;
+        let master_payload = (self.buf.len() - MASTER_HEADER_SIZE) as u32;
         self.buf[4..8].copy_from_slice(&master_payload.to_le_bytes());
         Ok(self.buf)
     }
@@ -193,21 +202,23 @@ mod tests {
         u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
     }
 
-    /// Walk the master container's children: (fourcc, header offset, payload).
+    /// Walk the master chunk's children: (fourcc, payload offset of the
+    /// child's header, payload). Offsets are what chunk references hold.
     fn children(file: &[u8]) -> Vec<(String, usize, &[u8])> {
         assert_eq!(&file[0..4], b"MDX2");
         let master = u32_at(file, 4) as usize;
         assert_eq!(8 + master, file.len(), "master size covers the whole file");
+        let payload = &file[8..];
         let mut out = Vec::new();
-        let mut at = 8;
-        while at < file.len() {
+        let mut at = 0;
+        while at < payload.len() {
             assert_eq!(at % 4, 0, "chunk header is 4-byte aligned");
-            let size = u32_at(file, at + 4) as usize;
-            let fourcc = String::from_utf8(file[at..at + 4].to_vec()).unwrap();
-            out.push((fourcc, at, &file[at + 8..at + 8 + size]));
+            let size = u32_at(payload, at + 4) as usize;
+            let fourcc = String::from_utf8(payload[at..at + 4].to_vec()).unwrap();
+            out.push((fourcc, at, &payload[at + 8..at + 8 + size]));
             at += 8 + (size + 3) / 4 * 4;
         }
-        assert_eq!(at, file.len());
+        assert_eq!(at, payload.len());
         out
     }
 
@@ -262,7 +273,7 @@ mod tests {
         let c = children(&file);
         let vbuf = c[2].2;
         assert_eq!(u32_at(vbuf, 0), 3);
-        assert_eq!(&file[c[1].1..c[1].1 + 4], b"ADEF");
+        assert_eq!(&file[8 + c[1].1..][..4], b"ADEF");
         assert_eq!(u32_at(vbuf, 4) as usize, c[1].1, "VBUF points at the ADEF header");
         assert_eq!(u32_at(vbuf, 8), 22);
         assert_eq!(vbuf.len(), 12 + 66);
@@ -279,7 +290,7 @@ mod tests {
         let file = sample();
         let c = children(&file);
         let geom = c[5].2;
-        let target = |i: usize| &file[u32_at(geom, i * 4) as usize..][..4];
+        let target = |i: usize| &file[8 + u32_at(geom, i * 4) as usize..][..4];
         assert_eq!(target(0), b"VBUF");
         assert_eq!(target(1), b"IBUF");
         assert_eq!(target(2), b"MATL");
@@ -300,5 +311,35 @@ mod tests {
         assert_eq!(p.intern("").unwrap(), 0);
         assert_eq!(p.intern("ab").unwrap(), 1);
         assert_eq!(p.bytes(), b"\0ab\0");
+    }
+
+    #[test]
+    fn first_chunk_is_at_payload_offset_zero() {
+        let file = sample();
+        let c = children(&file);
+        assert_eq!((c[0].0.as_str(), c[0].1), ("STRS", 0));
+        // the ADEF follows the padded STRS (header + payload rounded up to 4)
+        assert_eq!(c[1].1, 8 + (c[0].2.len() + 3) / 4 * 4);
+    }
+
+    #[test]
+    fn references_are_payload_relative_so_the_chunk_can_be_embedded() {
+        let file = sample();
+        // Embed the unchanged chunk at a 4-byte aligned offset inside a bigger
+        // container; resolving references against *its* payload still works.
+        let mut host = vec![0xAAu8; 24];
+        host.extend_from_slice(&file);
+        host.extend_from_slice(&[0xBB; 8]);
+        let chunk = &host[24..24 + file.len()];
+        assert_eq!(chunk, &file[..], "the embedded bytes are untouched");
+
+        let payload = &chunk[8..];
+        let geom_at = children(chunk).iter().find(|c| c.0 == "GEOM").unwrap().1;
+        let vbuf_ref = u32_at(payload, geom_at + 8) as usize;
+        assert_eq!(&payload[vbuf_ref..][..4], b"VBUF");
+        let adef_ref = u32_at(payload, vbuf_ref + 8 + 4) as usize;
+        assert_eq!(&payload[adef_ref..][..4], b"ADEF");
+        // and they are not file offsets: that would point 8 bytes further on
+        assert_ne!(&chunk[vbuf_ref..][..4], b"VBUF");
     }
 }

@@ -80,21 +80,31 @@ The `--matmap` parameter defines how glTF material properties map to application
 
 ## 6. MDX2 Binary Container Architecture
 
-MDX2 uses a chunked master container structure. All multi-byte numeric values are little-endian.
+MDX2 is a chunked format. All multi-byte numeric values are little-endian.
 
 ### Chunk Framing
 
-Every chunk (including the master container) follows a standard header:
+Every chunk, including the master chunk, follows a standard header:
 
 * **Type (4 bytes):** FourCC identifier.
 
 * **Payload Size (4 bytes):** Length of the payload in bytes (excluding header and 4-byte alignment padding).
 
-Because payloads are padded to 4-byte boundaries, every subsequent chunk naturally begins at a 4-byte aligned offset.
+The header is followed by the payload, then by zero padding up to the next 4-byte boundary. Because payloads are padded to 4-byte boundaries, every chunk begins at a 4-byte aligned offset relative to the start of its parent's payload.
 
-### Chunk References & File Offsets
+### The MDX2 Master Chunk
 
-References between chunks use absolute **file byte offsets** (or offsets relative to the start of the master container). Because all chunk payloads and headers are padded to 4-byte boundaries, every chunk begins at a 4-byte aligned offset, meaning the lower two bits of any chunk reference offset are always `0`.
+An MDX2 model is a single chunk with the FourCC `MDX2`, the *master chunk*. Its payload consists of all the other chunks (`STRS`, `ADEF`, `VBUF`, `IBUF`, `MATL`, `GEOM`) stored back to back, each with its own header and padding. The master chunk's payload size is therefore the combined size of those chunks, headers and padding included.
+
+A `.mdx` file is exactly one master chunk: it starts with the master chunk's 8-byte header (`MDX2`, payload size), and nothing precedes or follows the chunk. The same chunk can equally be embedded in another container.
+
+### Chunk References & Payload Offsets
+
+A chunk reference is a `u32` byte offset **within the master chunk's payload**: it is measured from the first byte of the payload (the byte immediately following the master chunk's 8-byte header) to the first byte, i.e. the header, of the referenced chunk. The first chunk in the payload is therefore at offset `0`.
+
+References never leave the master chunk's payload and never depend on where the master chunk itself is stored. An MDX2 chunk can thus be embedded in another file, or moved, without touching any of its contents.
+
+Because every chunk begins at a 4-byte aligned offset within the payload, the lower two bits of any chunk reference are always `0`.
 
 ## 7. Core MDX2 Chunk Inventory
 
@@ -122,7 +132,7 @@ Each `VBUF` chunk contains a header followed by raw interleaved vertex data:
 
 * **Vertex Count:** `u32` number of vertices.
 
-* **ADEF Reference:** 4-byte file offset pointing to the associated `ADEF` chunk.
+* **ADEF Reference:** `u32` payload offset (see section 6) pointing to the associated `ADEF` chunk.
 
 * **Stride (Vertex Size):** `u32` size of a single vertex in bytes.
 
@@ -166,10 +176,10 @@ Defines materials used by geometry batches. All fields are stored as little-endi
 
 ### `GEOM` — Geometry Batch Descriptions
 
-Defines a renderable batch by referencing its independent data chunks via 4-byte file offsets:
+Defines a renderable batch by referencing its independent data chunks via `u32` payload offsets (see section 6):
 
-* **VBUF Reference:** File offset pointing to the dedicated `VBUF` chunk.
+* **VBUF Reference:** Payload offset pointing to the dedicated `VBUF` chunk.
 
-* **IBUF Reference:** File offset pointing to the dedicated `IBUF` chunk.
+* **IBUF Reference:** Payload offset pointing to the dedicated `IBUF` chunk.
 
-* **MATL Reference:** File offset pointing to the `MATL` chunk.
+* **MATL Reference:** Payload offset pointing to the `MATL` chunk.

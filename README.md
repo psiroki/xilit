@@ -102,10 +102,13 @@ unnamed).
 
 ## MDX2 format
 
-Little-endian. Every chunk, the master included, is
+Little-endian. Every chunk is
 `FourCC | u32 payload size (unpadded) | payload | zero padding to 4 bytes`, so
-chunks are always 4-byte aligned. References are absolute file offsets of the
-target chunk's header. The file is a master `MDX2` chunk containing, in order:
+chunks are always 4-byte aligned. A file is exactly one master chunk, `MDX2`,
+whose payload holds all the others. Chunk references are `u32` offsets of the
+target chunk's header **from the start of the master payload** (the first child
+is at 0), never from the start of the file, so an MDX2 chunk can be embedded in
+another file or moved without touching its contents. Contents of the payload:
 
 | chunk | payload |
 |---|---|
