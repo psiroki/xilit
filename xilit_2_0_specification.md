@@ -10,7 +10,7 @@ Key constraints and characteristics of Xilit 2.0:
 
 * Targets indexed triangle geometry (`GL_TRIANGLES`).
 
-* Strictly enforces **16-bit indices (`u16`)**; exceeding 65,535 vertices/indices in a batch is an unrecoverable error.
+* Strictly enforces **16-bit indices (`u16`)**: a batch may contain at most 65,536 vertices (index values `0`–`65535`); exceeding that is an unrecoverable error. The number of indices in a batch is not limited to 65,536.
 
 * Bakes world transforms directly into vertex data.
 
@@ -56,7 +56,10 @@ Unlike primitive-level export, the `mdx export` command aggregates multiple mesh
 
 * **Reflections/Negative Determinants:** If a node's transformation matrix has a negative determinant (reflection/negative scaling), export must fail immediately with an unrecoverable error.
 
-* **Index Limits:** Indices are strictly `u16`. If a combined primitive batch exceeds 65,535 indices, export fails with an unrecoverable error.
+* **Vertex and Index Limits:** Indices are strictly `u16`, so an index can address at most 65,536 vertices (values `0` through `65535`).
+  * The limit applies to the **vertex count** of a material batch: if a batch would contain more than 65,536 vertices, export fails with an unrecoverable error.
+  * The **index count** of a batch is *not* limited to 65,536. Since vertices can be shared by many triangles, a batch with at most 65,536 vertices may have more than 65,536 indices (bounded only by the `u32` chunk size). Always a multiple of 3, as only `GL_TRIANGLES` is exported.
+  * Index values are local to the batch's `VBUF`, so each batch's indices always start at `0` regardless of the number of batches in the model.
 
 ## 5. Material Mapping (`--matmap`)
 
@@ -110,27 +113,29 @@ Because every chunk begins at a 4-byte aligned offset within the payload, the lo
 
 ### `STRS` — Shared String Pool
 
-Contains a sequence of NUL-terminated UTF-8 strings padded to a 4-byte boundary. All attribute names, shader names, texture paths, and uniform names are stored here as byte offsets relative to the start of the pool. Duplicate strings are deduplicated.
+Contains a sequence of NUL-terminated UTF-8 strings, followed by zero padding to a 4-byte boundary. All attribute names, shader names, texture paths, and uniform names are stored here and referenced by byte offsets relative to the start of the pool payload (string pool offsets, which are not chunk references and need not be 4-byte aligned). Duplicate strings are deduplicated. An MDX2 model contains exactly one `STRS` chunk.
 
 ### `ADEF` — Vertex Attribute Definition
 
-Defines the global vertex layout (matching `--vfmt`). The definition starts with a header: the number of attributes (`u32`). This is followed by the attribute definitions, each definition consisting of little-endian `u32` fields:
+Defines the global vertex layout (matching `--vfmt`). Since the vertex format is global, xilit emits a single `ADEF` chunk that is referenced by every `VBUF`. The definition starts with a header: the number of attributes (`u32`). This is followed by the attribute definitions, each definition consisting of five little-endian `u32` fields (20 bytes):
 
-1. Name offset (string pool offset)
+1. Name offset (string pool offset, e.g. of `position`, `normal`, `uv0`)
 
 2. Component count (1, 2, 3, or 4)
 
-3. Type (`GL_FLOAT`)
+3. Type (`GL_FLOAT`, `0x1406`)
 
-4. Normalized (`GL_FALSE`)
+4. Normalized (`GL_FALSE`, `0`)
 
 5. Vertex offset (byte offset within each vertex)
+
+Attributes are written in the order given by `--vfmt` and tightly packed (no gaps), so the vertex offset of an attribute is the sum of the sizes (`component count × 4` bytes) of the attributes before it, and the vertex stride is the sum of all attribute sizes. For the default `position,normal,uv0` format this yields attributes at offsets `0`, `12` and `24` and a stride of `32` bytes.
 
 ### `VBUF` — Vertex Buffer
 
 Each `VBUF` chunk contains a header followed by raw interleaved vertex data:
 
-* **Vertex Count:** `u32` number of vertices.
+* **Vertex Count:** `u32` number of vertices (at most 65,536, see section 4).
 
 * **ADEF Reference:** `u32` payload offset (see section 6) pointing to the associated `ADEF` chunk.
 
@@ -142,13 +147,13 @@ Each `VBUF` chunk contains a header followed by raw interleaved vertex data:
 
 Each `IBUF` chunk contains a header followed by raw index data:
 
-* **Index Count:** `u32` number of indices.
+* **Index Count:** `u32` number of indices (a multiple of 3; not limited to 65,536).
 
 * **Primitive Type:** `u32` OpenGL primitive type (`GL_TRIANGLES`).
 
 * **Index Type:** `u32` OpenGL index type (`GL_UNSIGNED_SHORT`).
 
-* **Index Data:** Little-endian `u16` indices, containing `index count × 2` bytes.
+* **Index Data:** Little-endian `u16` indices, containing `index count × 2` bytes. Every index is less than the vertex count of the batch's `VBUF`.
 
 ### `MATL` — Material Definitions
 
@@ -170,9 +175,9 @@ Defines materials used by geometry batches. All fields are stored as little-endi
 
     * For numeric types: Raw float values.
 
-    * For `GL_SAMPLER_2D`: A 32-bit word where the top 4 bits reserve flags (`0` for string pool offset containing the texture filename/path).
+    * For `GL_SAMPLER_2D`: A single 32-bit word (size 1). The top 4 bits are flags: xilit always writes `0`, meaning the lower 28 bits are a string pool offset of the texture filename/path. All other flag values are reserved for future use.
 
-    * For `GL_NULL` (type `0`): Empty value (size `0`).
+    * For `NULL_TYPE` (type `0`): Empty value (size `0`).
 
 ### `GEOM` — Geometry Batch Descriptions
 
