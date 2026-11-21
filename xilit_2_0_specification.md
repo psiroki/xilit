@@ -117,8 +117,6 @@ Contains a sequence of NUL-terminated UTF-8 strings, followed by zero padding to
 
 ### `ADEF` — Vertex Attribute Definition
 
-The definition starts with a header of two `u32` fields: the number of attributes and the stride (the vertex size in bytes). This is followed by the attribute definitions...
-
 Defines the global vertex layout (matching `--vfmt`). Since the vertex format is global, xilit emits a single `ADEF` chunk that is referenced by every `VBUF`. The definition starts with a header: the number of attributes (`u32`) and the stride, the vertex size in bytes (`u32`). This is followed by the attribute definitions, each definition consisting of five little-endian `u32` fields (20 bytes):
 
 1. Name offset (string pool offset, e.g. of `position`, `normal`, `uv0`)
@@ -141,7 +139,7 @@ Each `VBUF` chunk contains a header followed by raw interleaved vertex data:
 
 * **ADEF Reference:** `u32` payload offset (see section 6) pointing to the associated `ADEF` chunk.
 
-* **Stride (Vertex Size):** `u32` size of a single vertex in bytes. Identical to the stride in the ADEF header; stored here as well so the buffer size can be computed without the `ADEF`.
+* **Stride (Vertex Size):** `u32` size of a single vertex in bytes. Identical to the stride in the `ADEF` header; stored here as well so the buffer size can be computed without the `ADEF`.
 
 * **Vertex Data:** Raw vertex data packed consecutively, containing `vertex count × stride` bytes.
 

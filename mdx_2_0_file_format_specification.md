@@ -69,7 +69,6 @@ The `ADEF` chunk describes the layout of a single interleaved vertex, including 
 * `attribute_count` (`u32`): Number of attribute definitions following the header.
 * `stride` (`u32`): Size of one vertex in bytes. Every attribute must lie within it (see *Rules*).
 
-
 ### Attribute Entry Structure
 
 The header is followed by `attribute_count` entries of exactly five `u32` fields each (20 bytes per entry):
@@ -211,4 +210,4 @@ Readers can proceed as follows:
 3. Locate the `STRS` chunk, which is required to resolve every string pool offset.
 4. For each `GEOM` entry, resolve `vbuf_offset`, `ibuf_offset` and `matl_offset` (relative to the start of the master chunk's payload) to the respective chunks, resolve the `ADEF` chunk referenced by the `VBUF`, and submit draw calls.
 
-Readers should reject a file as malformed if a chunk extends beyond its parent's payload, a reference does not point to the header of a chunk of the expected type, a string pool offset points outside the string pool (or to a string without a terminating `\x00`), an index is greater than or equal to the `vertex_count` of its `VBUF`, a `VBUF` used with `GL_UNSIGNED_SHORT` indices has more than 65,536 vertices, or any of the other limits stated above is exceeded.
+Readers should reject a file as malformed if a chunk extends beyond its parent's payload, a reference does not point to the header of a chunk of the expected type, a string pool offset points outside the string pool (or to a string without a terminating `\x00`), the `stride` of a `VBUF` differs from the `stride` of its `ADEF`, an attribute of an `ADEF` extends beyond its `stride` or overlaps another attribute, an index is greater than or equal to the `vertex_count` of its `VBUF`, a `VBUF` used with `GL_UNSIGNED_SHORT` indices has more than 65,536 vertices, or any of the other limits stated above is exceeded.
