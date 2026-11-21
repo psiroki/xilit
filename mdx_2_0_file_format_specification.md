@@ -62,11 +62,13 @@ The `STRS` chunk contains a contiguous block of null-terminated UTF-8 strings (`
 
 ## 3. Vertex Attribute Definition (`ADEF`)
 
-The `ADEF` chunk describes the layout of a single interleaved vertex, so that a renderer can bind the contents of a `VBUF` chunk to shader attributes.
+The `ADEF` chunk describes the layout of a single interleaved vertex, including its total size, so that a renderer can bind a raw vertex buffer to shader attributes without needing any other information from the `VBUF` chunk.
 
 ### Header Layout (All little-endian)
 
 * `attribute_count` (`u32`): Number of attribute definitions following the header.
+* `stride` (`u32`): Size of one vertex in bytes. Every attribute must lie within it (see *Rules*).
+
 
 ### Attribute Entry Structure
 
@@ -80,19 +82,19 @@ The header is followed by `attribute_count` entries of exactly five `u32` fields
 | 4 | `normalized` | `u32` | OpenGL normalization flag. Currently always `GL_FALSE` (`0`). |
 | 5 | `vertex_offset` | `u32` | Byte offset of the attribute from the start of a vertex. |
 
-The payload size of an `ADEF` chunk is therefore `4 + attribute_count * 20` bytes, which is always a multiple of 4, so no padding is required.
+The payload size of an `ADEF` chunk is therefore `8 + attribute_count * 20` bytes, which is always a multiple of 4, so no padding is required.
 
 ### Rules
 
 * An attribute occupies `component_count * 4` bytes (all components are 32-bit `float`s) starting at `vertex_offset`.
-* Attributes must not overlap, and every attribute must lie entirely within the vertex, i.e. `vertex_offset + component_count * 4 <= stride` of every `VBUF` that references this `ADEF`.
+* Attributes must not overlap, and every attribute must lie entirely within the vertex, i.e. `vertex_offset + component_count * 4 <= stride`. The `stride` may exceed the end of the last attribute if the layout contains padding.
 * Attributes may be listed in any order; the order of entries need not match the order of `vertex_offset` values.
-* The `stride` of a `VBUF` is stored in the `VBUF` chunk, not in the `ADEF` chunk.
-* **Reusability:** Multiple `VBUF` chunks may reference a single `ADEF` chunk if they share an identical vertex layout. Writers producing a model with one global vertex format typically emit a single `ADEF` chunk referenced by all `VBUF` chunks.
+* The `stride` is stored redundantly in both the `ADEF` and the `VBUF` chunk, so that each is self-contained: the `ADEF` fully describes a vertex without consulting any `VBUF`, and a `VBUF` can compute the size of its data without consulting the `ADEF`. The two values must be equal: the `stride` of a `VBUF` must match the `stride` of the `ADEF` it references.
+* **Reusability:** Multiple `VBUF` chunks may reference a single `ADEF` chunk if they share the same vertex layout (and therefore the same stride). Writers producing a model with one global vertex format typically emit a single `ADEF` chunk referenced by all `VBUF` chunks.
 
 ### Example
 
-The default layout `position,normal,uv0` (tightly packed, `stride = 32`):
+The default layout `position,normal,uv0` (tightly packed): `attribute_count = 3`, `stride = 32`, with the entries:
 
 | Attribute | `name_offset` → | `component_count` | `type` | `normalized` | `vertex_offset` |
 | --------- | --------------- | ----------------- | ------ | ------------ | --------------- |
@@ -108,7 +110,7 @@ The `VBUF` chunk contains vertex attribute data paired with its structural layou
 
 * `vertex_count` (`u32`): Total number of vertices in the buffer.
 * `adef_offset` (`u32`): Chunk reference pointing to the associated `ADEF` chunk.
-* `stride` (`u32`): Total size of a single vertex in bytes.
+* `stride` (`u32`): Total size of a single vertex in bytes. Must equal the `stride` of the `ADEF` chunk referenced by `adef_offset`. It is stored here as well so that the size of the vertex data can be computed without resolving the `ADEF`.
 
 ### Data Payload
 

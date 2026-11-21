@@ -117,7 +117,9 @@ Contains a sequence of NUL-terminated UTF-8 strings, followed by zero padding to
 
 ### `ADEF` — Vertex Attribute Definition
 
-Defines the global vertex layout (matching `--vfmt`). Since the vertex format is global, xilit emits a single `ADEF` chunk that is referenced by every `VBUF`. The definition starts with a header: the number of attributes (`u32`). This is followed by the attribute definitions, each definition consisting of five little-endian `u32` fields (20 bytes):
+The definition starts with a header of two `u32` fields: the number of attributes and the stride (the vertex size in bytes). This is followed by the attribute definitions...
+
+Defines the global vertex layout (matching `--vfmt`). Since the vertex format is global, xilit emits a single `ADEF` chunk that is referenced by every `VBUF`. The definition starts with a header: the number of attributes (`u32`) and the stride, the vertex size in bytes (`u32`). This is followed by the attribute definitions, each definition consisting of five little-endian `u32` fields (20 bytes):
 
 1. Name offset (string pool offset, e.g. of `position`, `normal`, `uv0`)
 
@@ -129,7 +131,7 @@ Defines the global vertex layout (matching `--vfmt`). Since the vertex format is
 
 5. Vertex offset (byte offset within each vertex)
 
-Attributes are written in the order given by `--vfmt` and tightly packed (no gaps), so the vertex offset of an attribute is the sum of the sizes (`component count × 4` bytes) of the attributes before it, and the vertex stride is the sum of all attribute sizes. For the default `position,normal,uv0` format this yields attributes at offsets `0`, `12` and `24` and a stride of `32` bytes.
+Attributes are written in the order given by `--vfmt` and tightly packed (no gaps), so the vertex offset of an attribute is the sum of the sizes (`component count × 4` bytes) of the attributes before it, and the stride written in the header is the sum of all attribute sizes. For the default `position,normal,uv0` format this yields attributes at offsets `0`, `12` and `24` and a stride of `32` bytes.
 
 ### `VBUF` — Vertex Buffer
 
@@ -139,7 +141,7 @@ Each `VBUF` chunk contains a header followed by raw interleaved vertex data:
 
 * **ADEF Reference:** `u32` payload offset (see section 6) pointing to the associated `ADEF` chunk.
 
-* **Stride (Vertex Size):** `u32` size of a single vertex in bytes.
+* **Stride (Vertex Size):** `u32` size of a single vertex in bytes. Identical to the stride in the ADEF header; stored here as well so the buffer size can be computed without the `ADEF`.
 
 * **Vertex Data:** Raw vertex data packed consecutively, containing `vertex count × stride` bytes.
 

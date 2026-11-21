@@ -145,8 +145,9 @@ impl Writer {
 pub fn write(layout: &Layout, mut pool: StringPool, batches: &[Batch]) -> Result<Vec<u8>> {
     // ADEF payload (needs the attribute names interned before STRS is written).
     let defs: Vec<_> = layout.entries.iter().filter(|e| e.emits_attribute).collect();
-    let mut adef = Vec::with_capacity(4 + defs.len() * 20);
+    let mut adef = Vec::with_capacity(8 + defs.len() * 20);
     adef.extend_from_slice(&(defs.len() as u32).to_le_bytes());
+    adef.extend_from_slice(&layout.vertex_size.to_le_bytes());
     for entry in &defs {
         let name = pool.intern(&entry.field.name)?;
         for v in [name, entry.component_count, GL_FLOAT, GL_FALSE, entry.offset] {
@@ -255,14 +256,15 @@ mod tests {
         assert_eq!(c[0].2, b"lit\0position\0extra\0");
         let adef = c[1].2;
         assert_eq!(u32_at(adef, 0), 2);
+        assert_eq!(u32_at(adef, 4), 22);
         // position: name@4, 3 comps, GL_FLOAT, not normalized, offset 0
         assert_eq!(
-            [u32_at(adef, 4), u32_at(adef, 8), u32_at(adef, 12), u32_at(adef, 16), u32_at(adef, 20)],
+            [u32_at(adef, 8), u32_at(adef, 12), u32_at(adef, 16), u32_at(adef, 20), u32_at(adef, 24)],
             [4, 3, GL_FLOAT, 0, 0]
         );
         // extra: after 12 bytes of position + 2 of padding
         assert_eq!(
-            [u32_at(adef, 24), u32_at(adef, 28), u32_at(adef, 32), u32_at(adef, 36), u32_at(adef, 40)],
+            [u32_at(adef, 28), u32_at(adef, 32), u32_at(adef, 36), u32_at(adef, 40), u32_at(adef, 44)],
             [13, 2, GL_FLOAT, 0, 14]
         );
     }
